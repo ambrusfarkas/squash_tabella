@@ -30,8 +30,13 @@ def calculate_leaderboard(matches):
         # Compute ELO
         r_w, r_l = elo.get(w, 1200), elo.get(l, 1200)
         expected_w = 1 / (1 + 10 ** ((r_l - r_w) / 400))
-        elo[w] = round(r_w + K * (1 - expected_w))
-        elo[l] = round(r_l - K * (0 - (1 - expected_w)))
+        
+        # Calculate the exact number of points that change hands
+        points_exchanged = K * (1 - expected_w)
+        
+        # Winner takes the points, loser drops the points
+        elo[w] = round(r_w + points_exchanged)
+        elo[l] = round(r_l - points_exchanged)
 
     # Process metrics into a dataframe
     rows = []
