@@ -23,7 +23,8 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 # Read Data safely
 try:
-    df_database = conn.read(spreadsheet=SHEET_URL, worksheet="Munkalap1", usecols=[0, 1, 2, 3], ttl=0) # ttl=0 forces fresh read every time
+    # Set explicitly back to "Matches"
+    df_database = conn.read(spreadsheet=SHEET_URL, worksheet="Matches", usecols=[0, 1, 2, 3], ttl=0) 
     df_database = df_database.dropna(how="all")
     st.session_state.matches = df_database.to_dict('records')
 except Exception as e:
@@ -89,6 +90,7 @@ def calculate_stats(matches):
         
     if rows:
         df = pd.DataFrame(rows).sort_values(by="🔮 ELO Rating", ascending=False).reset_index(drop=True)
+        # Restore the explicit 1, 2, 3 ranking
         df["Rank"] = df.index + 1
     else:
         df = pd.DataFrame(columns=["Rank", "Player", "🔮 ELO Rating", "Played", "Won", "Winrate", "Total Points", "Avg Points", "Avg Diff"])
@@ -105,7 +107,8 @@ if view == "🏆 Leaderboard":
     if not st.session_state.matches:
         st.warning("No matches recorded yet. Play a game!")
     else:
-        st.table(df_leaderboard.set_index("Rank"))
+        # Hide the blank index column, keep the generated 'Rank' column
+        st.table(df_leaderboard.style.hide(axis="index"))
 
 elif view == "📝 Record Match":
     st.title("📝 Enter Match Result")
@@ -159,8 +162,8 @@ elif view == "📝 Record Match":
                 updated_df = updated_df[["Winner", "Winner_Score", "Loser_Score", "Loser"]]
                 
                 try:
-                    # 3. Push to Google Sheets explicitly
-                    conn.update(spreadsheet=SHEET_URL, worksheet="Munkalap1", data=updated_df)
+                    # 3. Push to Google Sheets explicitly (Matches)
+                    conn.update(spreadsheet=SHEET_URL, worksheet="Matches", data=updated_df)
                     
                     # 4. Force hard reset of caches
                     st.cache_data.clear()
@@ -245,7 +248,7 @@ elif view == "⚔️ 1v1 Head-to-Head":
                 c2.warning("**Nail-biters:** \n\nNone yet!")
 
             st.write("### Game History Breakdown")
-            st.table(pd.DataFrame(h2h_matches).reset_index(drop=True))
+            st.table(pd.DataFrame(h2h_matches).style.hide(axis="index"))
         except ValueError:
             st.error("There is a formatting error in your historical match scores. Please check your Google Sheet for text inside the score columns.")
     else:
