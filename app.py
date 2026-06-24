@@ -10,7 +10,7 @@ if 'matches' not in st.session_state:
     st.session_state.matches = []
 
 # 2. Advanced ELO & Stats Engine
-def calculate_leaderboard(matches):
+def calculate_stats(matches):
     elo = {p: 1200 for p in players_list} # Base ELO starting score
     stats = {p: {"Played": 0, "Won": 0, "Pts_Scored": 0, "Pts_Conceded": 0} for p in players_list}
     K = 32 # ELO volatility factor
@@ -54,17 +54,19 @@ def calculate_leaderboard(matches):
         
     df = pd.DataFrame(rows).sort_values(by="🔮 ELO Rating", ascending=False).reset_index(drop=True)
     df["Helyezés"] = df.index + 1
-    return df
+    return df, elo
+
+# Calculate global stats to use across pages
+df_leaderboard, current_elos = calculate_stats(st.session_state.matches)
 
 # 3. Application Interface Layout
 st.sidebar.title("🏸 Squash Dashboard")
-view = st.sidebar.radio("Go to:", ["🏆 Leaderboard", "📝 Record Match", "⚔️ 1v1 Head-to-Head", "⚙️ Import Data"])
+view = st.sidebar.radio("Go to:", ["🏆 Leaderboard", "📝 Record Match", "⚔️ 1v1 Head-to-Head", "⚙️ Data Management"])
 
 if view == "🏆 Leaderboard":
     st.title("🏆 Club Standings & Rankings")
     if not st.session_state.matches:
-        st.warning("No matches recorded yet. Go to 'Import Data' to upload your CSV!")
-    df_leaderboard = calculate_leaderboard(st.session_state.matches)
+        st.warning("No matches recorded yet. Go to 'Data Management' to upload your CSV!")
     st.dataframe(df_leaderboard.set_index("Helyezés"), use_container_width=True)
 
 elif view == "📝 Record Match":
@@ -94,53 +96,72 @@ elif view == "⚔️ 1v1 Head-to-Head":
     p1 = st.selectbox("Select Player One:", players_list)
     p2 = st.selectbox("Select Player Two:", [p for p in players_list if p != p1])
     
+    # Current Elo for Predictions
+    elo_p1 = current_elos.get(p1, 1200)
+    elo_p2 = current_elos.get(p2, 1200)
+    
+    # Filter historic matchups
     h2h_matches = [m for m in st.session_state.matches if (m["Winner"] == p1 and m["Loser"] == p2) or (m["Winner"] == p2 and m["Loser"] == p1)]
+    total_games = len(h2h_matches)
+    
     p1_wins = sum(1 for m in h2h_matches if m["Winner"] == p1)
     p2_wins = sum(1 for m in h2h_matches if m["Winner"] == p2)
     
-    st.subheader(f"Lifetime Matchup Record: {p1} vs {p2}")
+    p1_pts = sum(m["Winner_Score"] if m["Winner"] == p1 else m["Loser_Score"] for m in h2h_matches)
+    p2_pts = sum(m["Winner_Score"] if m["Winner"] == p2 else m["Loser_Score"] for m in h2h_matches)
+    
+    # Calculate derived stats safely
+    p1_wr = f"{(p1_wins / total_games * 100):.0f}%" if total_games > 0 else "0%"
+    p2_wr = f"{(p2_wins / total_games * 100):.0f}%" if total_games > 0 else "0%"
+    
+    p1_avg_diff = (p1_pts - p2_pts) / total_games if total_games > 0 else 0
+    p2_avg_diff = (p2_pts - p1_pts) / total_games if total_games > 0 else 0
+    
+    # ELO Prediction Math
+    K = 32
+    exp_p1_win = 1 / (1 + 10 ** ((elo_p2 - elo_p1) / 400))
+    pts_if_p1_wins = round(K * (1 - exp_p1_win))
+    
+    exp_p2_win = 1 / (1 + 10 ** ((elo_p1 - elo_p2) / 400))
+    pts_if_p2_wins = round(K * (1 - exp_p2_win))
+
+    st.subheader(f"Current Matchup: {p1} vs {p2}")
+    
+    # Show Current ELO & Stakes
+    st.markdown("### 🔮 Match Stakes")
+    col_elo1, col_elo2 = st.columns(2)
+    col_elo1.metric(f"{p1} Current Elo", elo_p1)
+    col_elo2.metric(f"{p2} Current Elo", elo_p2)
+    
+    st.info(f"**If {p1} wins:** {p1} gains +{pts_if_p1_wins} Elo, {p2} drops -{pts_if_p1_wins} Elo. \n\n"
+            f"**If {p2} wins:** {p2} gains +{pts_if_p2_wins} Elo, {p1} drops -{pts_if_p2_wins} Elo.")
+    
+    st.divider()
+    
+    # Show Lifetime Stats
+    st.markdown("### 📊 Lifetime History")
     col_stat1, col_stat2 = st.columns(2)
-    col_stat1.metric(f"{p1} Total Wins", p1_wins)
-    col_stat2.metric(f"{p2} Total Wins", p2_wins)
+    
+    with col_stat1:
+        st.markdown(f"#### {p1} Stats")
+        st.metric("Total Wins vs Opponent", p1_wins)
+        st.metric("Winrate", p1_wr)
+        st.metric("Total Points Scored", p1_pts)
+        st.metric("Avg Score Difference", f"{p1_avg_diff:+.1f}")
+
+    with col_stat2:
+        st.markdown(f"#### {p2} Stats")
+        st.metric("Total Wins vs Opponent", p2_wins)
+        st.metric("Winrate", p2_wr)
+        st.metric("Total Points Scored", p2_pts)
+        st.metric("Avg Score Difference", f"{p2_avg_diff:+.1f}")
     
     if h2h_matches:
         st.write("### Game History Breakdown")
-        st.write(pd.DataFrame(h2h_matches))
+        st.dataframe(pd.DataFrame(h2h_matches), use_container_width=True)
     else:
         st.info("No recorded matches between these two players yet.")
 
-elif view == "⚙️ Import Data":
-    st.title("⚙️ Import Historical Matches")
-    st.write("Upload your existing Google Sheets CSV export here to load all your past matches.")
-    uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
-    
-    if uploaded_file is not None:
-        try:
-            df_upload = pd.read_csv(uploaded_file)
-            # Find the columns we need based on your original file
-            # Nyertes, Nyertes pont, Vesztes pont, Vesztes
-            if "Nyertes" in df_upload.columns and "Vesztes" in df_upload.columns:
-                imported_matches = []
-                for index, row in df_upload.dropna(subset=["Nyertes", "Vesztes"]).iterrows():
-                    imported_matches.append({
-                        "Winner": str(row["Nyertes"]).strip(),
-                        "Winner_Score": int(row["Nyertes pont"]),
-                        "Loser_Score": int(row["Vesztes pont"]),
-                        "Loser": str(row["Vesztes"]).strip()
-                    })
-                
-                if st.button("Load Data!"):
-                    st.session_state.matches = imported_matches
-                    st.success(f"Successfully loaded {len(imported_matches)} matches!")
-            else:
-                st.error("Could not find 'Nyertes' and 'Vesztes' columns in the CSV. Make sure you upload the correct file.")
-        except Exception as e:
-            st.error(f"Error reading file: {e}")
-
-# Change the sidebar navigation option slightly to reflect the new features:
-view = st.sidebar.radio("Go to:", ["🏆 Leaderboard", "📝 Record Match", "⚔️ 1v1 Head-to-Head", "⚙️ Data Management"])
-
-# Replace your previous "Import Data" block with this entire new section:
 elif view == "⚙️ Data Management":
     st.title("⚙️ Manage Your Database")
     
