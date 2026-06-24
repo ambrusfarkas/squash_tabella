@@ -136,3 +136,69 @@ elif view == "⚙️ Import Data":
                 st.error("Could not find 'Nyertes' and 'Vesztes' columns in the CSV. Make sure you upload the correct file.")
         except Exception as e:
             st.error(f"Error reading file: {e}")
+
+# Change the sidebar navigation option slightly to reflect the new features:
+view = st.sidebar.radio("Go to:", ["🏆 Leaderboard", "📝 Record Match", "⚔️ 1v1 Head-to-Head", "⚙️ Data Management"])
+
+# Replace your previous "Import Data" block with this entire new section:
+elif view == "⚙️ Data Management":
+    st.title("⚙️ Manage Your Database")
+    
+    st.subheader("📥 Backup Your Data")
+    st.write("Download your current match history to your device so you never lose it.")
+    
+    if st.session_state.matches:
+        matches_df = pd.DataFrame(st.session_state.matches)
+        # Ensure correct column order for exporting
+        if set(["Winner", "Winner_Score", "Loser_Score", "Loser"]).issubset(matches_df.columns):
+            export_df = matches_df[["Winner", "Winner_Score", "Loser_Score", "Loser"]]
+            csv_data = export_df.to_csv(index=False).encode('utf-8')
+            
+            st.download_button(
+                label="💾 Download Database Backup (CSV)",
+                data=csv_data,
+                file_name="squash_database_backup.csv",
+                mime="text/csv"
+            )
+    else:
+        st.info("No matches recorded yet. Add some matches to download a backup.")
+        
+    st.divider()
+
+    st.subheader("📤 Upload Historical Matches")
+    st.write("Upload a previously saved CSV backup to restore your data.")
+    uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
+    
+    if uploaded_file is not None:
+        try:
+            df_upload = pd.read_csv(uploaded_file)
+            
+            # This checks for both our English app columns and your old Hungarian spreadsheet columns
+            has_app_cols = "Winner" in df_upload.columns and "Loser" in df_upload.columns
+            has_sheet_cols = "Nyertes" in df_upload.columns and "Vesztes" in df_upload.columns
+            
+            if has_app_cols or has_sheet_cols:
+                imported_matches = []
+                
+                # Map column names based on the file type uploaded
+                col_w = "Winner" if has_app_cols else "Nyertes"
+                col_w_pts = "Winner_Score" if has_app_cols else "Nyertes pont"
+                col_l_pts = "Loser_Score" if has_app_cols else "Vesztes pont"
+                col_l = "Loser" if has_app_cols else "Vesztes"
+                
+                for index, row in df_upload.dropna(subset=[col_w, col_l]).iterrows():
+                    imported_matches.append({
+                        "Winner": str(row[col_w]).strip(),
+                        "Winner_Score": int(row[col_w_pts]),
+                        "Loser_Score": int(row[col_l_pts]),
+                        "Loser": str(row[col_l]).strip()
+                    })
+                
+                if st.button("Load Data & Overwrite Current Memory"):
+                    st.session_state.matches = imported_matches
+                    st.success(f"Successfully loaded {len(imported_matches)} matches!")
+                    st.rerun()
+            else:
+                st.error("Could not find the correct columns in the CSV. Make sure you upload a valid backup.")
+        except Exception as e:
+            st.error(f"Error reading file: {e}")
