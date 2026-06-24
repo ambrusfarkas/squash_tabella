@@ -16,18 +16,18 @@ st.markdown("""
 players_list = ["Ambrus", "Andris", "Dávid", "Donát", "Marci", "Matyi", "Ricsi", "Zoli"]
 
 # --- GOOGLE SHEETS DATABASE CONNECTION ---
-# Hardcoded URL for foolproof connection
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1O1A0kF4rxf-oxoyTYCyeMFGXCCMi-GpURSjH7U8_ACY/edit"
 
+# Initialize connection
 conn = st.connection("gsheets", type=GSheetsConnection)
 
+# Read Data safely
 try:
-    # Explicitly pass the spreadsheet URL here
-    df_database = conn.read(spreadsheet=SHEET_URL, worksheet="Matches", usecols=[0, 1, 2, 3], ttl=5)
+    df_database = conn.read(spreadsheet=SHEET_URL, worksheet="Munkalap1", usecols=[0, 1, 2, 3], ttl=0) # ttl=0 forces fresh read every time
     df_database = df_database.dropna(how="all")
     st.session_state.matches = df_database.to_dict('records')
 except Exception as e:
-    st.error(f"Could not connect to Google Sheets. Make sure the sheet name is 'Matches'. Error: {e}")
+    st.error(f"Could not connect to Google Sheets. Error: {e}")
     if 'matches' not in st.session_state:
         st.session_state.matches = []
 # -----------------------------------------
@@ -44,8 +44,11 @@ def calculate_stats(matches):
         if w == 'nan' or l == 'nan' or not w or not l:
             continue
             
-        w_pts = int(m.get("Winner_Score", 0))
-        l_pts = int(m.get("Loser_Score", 0))
+        try:
+            w_pts = int(m.get("Winner_Score", 0))
+            l_pts = int(m.get("Loser_Score", 0))
+        except ValueError:
+            continue # Skip corrupted rows
         
         if w in stats:
             stats[w]["Played"] += 1; stats[w]["Won"] += 1
@@ -120,8 +123,11 @@ elif view == "📝 Record Match":
             if winner and loser:
                 relevant_matches = [m for m in st.session_state.matches if m.get("Winner") == winner and m.get("Loser") == loser]
                 if relevant_matches:
-                    avg_loser_score = sum(int(m.get("Loser_Score", 0)) for m in relevant_matches) / len(relevant_matches)
-                    default_loser_points = int(round(avg_loser_score))
+                    try:
+                        avg_loser_score = sum(int(m.get("Loser_Score", 0)) for m in relevant_matches) / len(relevant_matches)
+                        default_loser_points = int(round(avg_loser_score))
+                    except ValueError:
+                        pass
                     
             l_score = st.number_input("Loser Points", min_value=0, value=default_loser_points, step=1)
             
@@ -137,16 +143,32 @@ elif view == "📝 Record Match":
             elif w_score <= l_score:
                 st.error("Error: Winner points must be strictly greater than loser points.")
             else:
-                new_match = {"Winner": winner, "Winner_Score": w_score, "Loser_Score": l_score, "Loser": loser}
+                # 1. Add new match to session state
+                new_match = {
+                    "Winner": winner, 
+                    "Winner_Score": int(w_score), 
+                    "Loser_Score": int(l_score), 
+                    "Loser": loser
+                }
                 st.session_state.matches.append(new_match)
                 
+                # 2. Convert state to safe DataFrame
                 updated_df = pd.DataFrame(st.session_state.matches)
-                # Explicitly pass the spreadsheet URL here too
-                conn.update(spreadsheet=SHEET_URL, worksheet="Matches", data=updated_df)
                 
-                st.cache_data.clear()
-                st.success(f"Match Saved to Google Sheets! {winner} beat {loser} ({w_score}-{l_score})")
-                st.rerun()
+                # Force exact columns so Google Sheets doesn't reject it
+                updated_df = updated_df[["Winner", "Winner_Score", "Loser_Score", "Loser"]]
+                
+                try:
+                    # 3. Push to Google Sheets explicitly
+                    conn.update(spreadsheet=SHEET_URL, worksheet="Munkalap1", data=updated_df)
+                    
+                    # 4. Force hard reset of caches
+                    st.cache_data.clear()
+                    
+                    st.success(f"Match Saved to Google Sheets! {winner} beat {loser} ({w_score}-{l_score})")
+                    st.rerun() # Refresh app to show new leaderboard
+                except Exception as e:
+                    st.error(f"Failed to save to Google Sheets: {e}")
 
 elif view == "⚔️ 1v1 Head-to-Head":
     st.title("⚔️ Rivalry Statistics")
@@ -179,49 +201,52 @@ elif view == "⚔️ 1v1 Head-to-Head":
         p1_wins = sum(1 for m in h2h_matches if m.get("Winner") == p1)
         p2_wins = sum(1 for m in h2h_matches if m.get("Winner") == p2)
         
-        p1_pts = sum(int(m.get("Winner_Score", 0)) if m.get("Winner") == p1 else int(m.get("Loser_Score", 0)) for m in h2h_matches)
-        p2_pts = sum(int(m.get("Winner_Score", 0)) if m.get("Winner") == p2 else int(m.get("Loser_Score", 0)) for m in h2h_matches)
-        
-        p1_wr = f"{(p1_wins / total_games * 100):.0f}%"
-        p2_wr = f"{(p2_wins / total_games * 100):.0f}%"
-        
-        p1_avg_pts, p2_avg_pts = p1_pts / total_games, p2_pts / total_games
-        
-        blowout_match = max(h2h_matches, key=lambda m: abs(int(m.get('Winner_Score', 0)) - int(m.get('Loser_Score', 0))))
-        blowout_margin = int(blowout_match.get('Winner_Score', 0)) - int(blowout_match.get('Loser_Score', 0))
-        blowout_winner = blowout_match.get('Winner')
-        
-        close_games = [m for m in h2h_matches if abs(int(m.get('Winner_Score', 0)) - int(m.get('Loser_Score', 0))) <= 2]
-        p1_close_wins = sum(1 for m in close_games if m.get('Winner') == p1)
-        p2_close_wins = sum(1 for m in close_games if m.get('Winner') == p2)
-        
-        st.markdown("### 📊 Lifetime History")
-        col_stat1, col_stat2 = st.columns(2)
-        
-        with col_stat1:
-            st.markdown(f"#### {p1} Stats")
-            st.metric("Total Wins vs Opponent", p1_wins)
-            st.metric("Winrate", p1_wr)
-            st.metric("Avg Points Scored per Game", f"{p1_avg_pts:.1f}")
-
-        with col_stat2:
-            st.markdown(f"#### {p2} Stats")
-            st.metric("Total Wins vs Opponent", p2_wins)
-            st.metric("Winrate", p2_wr)
-            st.metric("Avg Points Scored per Game", f"{p2_avg_pts:.1f}")
+        try:
+            p1_pts = sum(int(m.get("Winner_Score", 0)) if m.get("Winner") == p1 else int(m.get("Loser_Score", 0)) for m in h2h_matches)
+            p2_pts = sum(int(m.get("Winner_Score", 0)) if m.get("Winner") == p2 else int(m.get("Loser_Score", 0)) for m in h2h_matches)
             
-        st.divider()
-        
-        st.markdown("### 🌶️ Insightful Data")
-        c1, c2 = st.columns(2)
-        c1.info(f"**Biggest Blowout:** \n\n{blowout_winner} crushed by **{blowout_margin} points** ({blowout_match.get('Winner_Score')} - {blowout_match.get('Loser_Score')}).")
-        
-        if close_games:
-            c2.warning(f"**Nail-biters (1-2 point diff):** \n\nOut of {len(close_games)} close games, {p1} won **{p1_close_wins}**, and {p2} won **{p2_close_wins}**.")
-        else:
-            c2.warning("**Nail-biters:** \n\nNone yet!")
+            p1_wr = f"{(p1_wins / total_games * 100):.0f}%"
+            p2_wr = f"{(p2_wins / total_games * 100):.0f}%"
+            
+            p1_avg_pts, p2_avg_pts = p1_pts / total_games, p2_pts / total_games
+            
+            blowout_match = max(h2h_matches, key=lambda m: abs(int(m.get('Winner_Score', 0)) - int(m.get('Loser_Score', 0))))
+            blowout_margin = int(blowout_match.get('Winner_Score', 0)) - int(blowout_match.get('Loser_Score', 0))
+            blowout_winner = blowout_match.get('Winner')
+            
+            close_games = [m for m in h2h_matches if abs(int(m.get('Winner_Score', 0)) - int(m.get('Loser_Score', 0))) <= 2]
+            p1_close_wins = sum(1 for m in close_games if m.get('Winner') == p1)
+            p2_close_wins = sum(1 for m in close_games if m.get('Winner') == p2)
+            
+            st.markdown("### 📊 Lifetime History")
+            col_stat1, col_stat2 = st.columns(2)
+            
+            with col_stat1:
+                st.markdown(f"#### {p1} Stats")
+                st.metric("Total Wins vs Opponent", p1_wins)
+                st.metric("Winrate", p1_wr)
+                st.metric("Avg Points Scored per Game", f"{p1_avg_pts:.1f}")
 
-        st.write("### Game History Breakdown")
-        st.table(pd.DataFrame(h2h_matches).reset_index(drop=True))
+            with col_stat2:
+                st.markdown(f"#### {p2} Stats")
+                st.metric("Total Wins vs Opponent", p2_wins)
+                st.metric("Winrate", p2_wr)
+                st.metric("Avg Points Scored per Game", f"{p2_avg_pts:.1f}")
+                
+            st.divider()
+            
+            st.markdown("### 🌶️ Insightful Data")
+            c1, c2 = st.columns(2)
+            c1.info(f"**Biggest Blowout:** \n\n{blowout_winner} crushed by **{blowout_margin} points** ({blowout_match.get('Winner_Score')} - {blowout_match.get('Loser_Score')}).")
+            
+            if close_games:
+                c2.warning(f"**Nail-biters (1-2 point diff):** \n\nOut of {len(close_games)} close games, {p1} won **{p1_close_wins}**, and {p2} won **{p2_close_wins}**.")
+            else:
+                c2.warning("**Nail-biters:** \n\nNone yet!")
+
+            st.write("### Game History Breakdown")
+            st.table(pd.DataFrame(h2h_matches).reset_index(drop=True))
+        except ValueError:
+            st.error("There is a formatting error in your historical match scores. Please check your Google Sheet for text inside the score columns.")
     else:
         st.info("No recorded matches between these two players yet.")
