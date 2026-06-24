@@ -48,7 +48,7 @@ def calculate_stats(matches):
             w_pts = int(m.get("Winner_Score", 0))
             l_pts = int(m.get("Loser_Score", 0))
         except ValueError:
-            continue
+            continue 
         
         if w in stats:
             stats[w]["Played"] += 1; stats[w]["Won"] += 1
@@ -108,9 +108,13 @@ if view == "🏆 Leaderboard":
         st.table(df_leaderboard.style.hide(axis="index"))
         
         st.subheader("🕒 Recent Matches")
-        # Grab last 10, reverse to show newest first
         recent_matches = pd.DataFrame(st.session_state.matches[-10:]).iloc[::-1]
-        st.table(recent_matches)
+        
+        # Explicitly force scores to integers here
+        recent_matches["Winner_Score"] = recent_matches["Winner_Score"].astype(int)
+        recent_matches["Loser_Score"] = recent_matches["Loser_Score"].astype(int)
+        
+        st.table(recent_matches.style.hide(axis="index"))
 
 elif view == "📝 Record Match":
     st.title("📝 Enter Match Result")
