@@ -38,13 +38,16 @@ def calculate_stats(matches):
         elo[w] = round(r_w + points_exchanged)
         elo[l] = round(r_l - points_exchanged)
 
-    # Process metrics into a dataframe
+    # Process metrics into a dataframe (Filtering out players with 0 matches)
     rows = []
     for p in players_list:
         s = stats[p]
-        wr = f"{(s['Won'] / s['Played'] * 100):.0f}%" if s['Played'] > 0 else "0%"
-        avg_pt = f"{(s['Pts_Scored'] / s['Played']):.2f}" if s['Played'] > 0 else "0.00"
-        avg_diff = f"{((s['Pts_Scored'] - s['Pts_Conceded']) / s['Played']):.2f}" if s['Played'] > 0 else "0.00"
+        if s["Played"] == 0:
+            continue # Skip adding to leaderboard if they haven't played
+            
+        wr = f"{(s['Won'] / s['Played'] * 100):.0f}%"
+        avg_pt = f"{(s['Pts_Scored'] / s['Played']):.2f}"
+        avg_diff = f"{((s['Pts_Scored'] - s['Pts_Conceded']) / s['Played']):.2f}"
         
         rows.append({
             "Helyezés": 0, "Játékos": p, "🔮 ELO Rating": elo[p],
@@ -52,8 +55,12 @@ def calculate_stats(matches):
             "Össz. Pont": s["Pts_Scored"], "átl. pont": avg_pt, "átl. különbség": avg_diff
         })
         
-    df = pd.DataFrame(rows).sort_values(by="🔮 ELO Rating", ascending=False).reset_index(drop=True)
-    df["Helyezés"] = df.index + 1
+    if rows:
+        df = pd.DataFrame(rows).sort_values(by="🔮 ELO Rating", ascending=False).reset_index(drop=True)
+        df["Helyezés"] = df.index + 1
+    else:
+        df = pd.DataFrame(columns=["Helyezés", "Játékos", "🔮 ELO Rating", "Játszott", "Nyert", "Winrate", "Össz. Pont", "átl. pont", "átl. különbség"])
+        
     return df, elo
 
 # Calculate global stats to use across pages
@@ -65,9 +72,19 @@ view = st.sidebar.radio("Go to:", ["🏆 Leaderboard", "📝 Record Match", "⚔
 
 if view == "🏆 Leaderboard":
     st.title("🏆 Club Standings & Rankings")
+    
     if not st.session_state.matches:
         st.warning("No matches recorded yet. Go to 'Data Management' to upload your CSV!")
-    st.dataframe(df_leaderboard.set_index("Helyezés"), use_container_width=True)
+    else:
+        # Style the dataframe for better readability
+        styled_df = df_leaderboard.style.set_properties(**{
+            'text-align': 'center'
+        }).set_table_styles([{
+            'selector': 'th',
+            'props': [('text-align', 'center')]
+        }])
+        
+        st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
 elif view == "📝 Record Match":
     st.title("📝 Enter Match Result")
@@ -104,19 +121,6 @@ elif view == "⚔️ 1v1 Head-to-Head":
     h2h_matches = [m for m in st.session_state.matches if (m["Winner"] == p1 and m["Loser"] == p2) or (m["Winner"] == p2 and m["Loser"] == p1)]
     total_games = len(h2h_matches)
     
-    p1_wins = sum(1 for m in h2h_matches if m["Winner"] == p1)
-    p2_wins = sum(1 for m in h2h_matches if m["Winner"] == p2)
-    
-    p1_pts = sum(m["Winner_Score"] if m["Winner"] == p1 else m["Loser_Score"] for m in h2h_matches)
-    p2_pts = sum(m["Winner_Score"] if m["Winner"] == p2 else m["Loser_Score"] for m in h2h_matches)
-    
-    # Calculate derived stats safely
-    p1_wr = f"{(p1_wins / total_games * 100):.0f}%" if total_games > 0 else "0%"
-    p2_wr = f"{(p2_wins / total_games * 100):.0f}%" if total_games > 0 else "0%"
-    
-    p1_avg_diff = (p1_pts - p2_pts) / total_games if total_games > 0 else 0
-    p2_avg_diff = (p2_pts - p1_pts) / total_games if total_games > 0 else 0
-    
     # ELO Prediction Math
     K = 32
     exp_p1_win = 1 / (1 + 10 ** ((elo_p2 - elo_p1) / 400))
@@ -138,27 +142,57 @@ elif view == "⚔️ 1v1 Head-to-Head":
     
     st.divider()
     
-    # Show Lifetime Stats
-    st.markdown("### 📊 Lifetime History")
-    col_stat1, col_stat2 = st.columns(2)
-    
-    with col_stat1:
-        st.markdown(f"#### {p1} Stats")
-        st.metric("Total Wins vs Opponent", p1_wins)
-        st.metric("Winrate", p1_wr)
-        st.metric("Total Points Scored", p1_pts)
-        st.metric("Avg Score Difference", f"{p1_avg_diff:+.1f}")
+    if total_games > 0:
+        p1_wins = sum(1 for m in h2h_matches if m["Winner"] == p1)
+        p2_wins = sum(1 for m in h2h_matches if m["Winner"] == p2)
+        
+        p1_pts = sum(m["Winner_Score"] if m["Winner"] == p1 else m["Loser_Score"] for m in h2h_matches)
+        p2_pts = sum(m["Winner_Score"] if m["Winner"] == p2 else m["Loser_Score"] for m in h2h_matches)
+        
+        p1_wr = f"{(p1_wins / total_games * 100):.0f}%"
+        p2_wr = f"{(p2_wins / total_games * 100):.0f}%"
+        
+        p1_avg_pts = p1_pts / total_games
+        p2_avg_pts = p2_pts / total_games
+        
+        # Fun Stats calculations
+        blowout_match = max(h2h_matches, key=lambda m: abs(m['Winner_Score'] - m['Loser_Score']))
+        blowout_margin = blowout_match['Winner_Score'] - blowout_match['Loser_Score']
+        blowout_winner = blowout_match['Winner']
+        
+        close_games = [m for m in h2h_matches if abs(m['Winner_Score'] - m['Loser_Score']) <= 2]
+        p1_close_wins = sum(1 for m in close_games if m['Winner'] == p1)
+        p2_close_wins = sum(1 for m in close_games if m['Winner'] == p2)
+        
+        # Show Lifetime Stats
+        st.markdown("### 📊 Lifetime History")
+        col_stat1, col_stat2 = st.columns(2)
+        
+        with col_stat1:
+            st.markdown(f"#### {p1} Stats")
+            st.metric("Total Wins vs Opponent", p1_wins)
+            st.metric("Winrate", p1_wr)
+            st.metric("Avg Points Scored per Game", f"{p1_avg_pts:.1f}")
 
-    with col_stat2:
-        st.markdown(f"#### {p2} Stats")
-        st.metric("Total Wins vs Opponent", p2_wins)
-        st.metric("Winrate", p2_wr)
-        st.metric("Total Points Scored", p2_pts)
-        st.metric("Avg Score Difference", f"{p2_avg_diff:+.1f}")
-    
-    if h2h_matches:
+        with col_stat2:
+            st.markdown(f"#### {p2} Stats")
+            st.metric("Total Wins vs Opponent", p2_wins)
+            st.metric("Winrate", p2_wr)
+            st.metric("Avg Points Scored per Game", f"{p2_avg_pts:.1f}")
+            
+        st.divider()
+        
+        st.markdown("### 🌶️ Insightful Data")
+        c1, c2 = st.columns(2)
+        c1.info(f"**Biggest Blowout:** \n\n{blowout_winner} crushed the opponent by a massive **{blowout_margin} points** ({blowout_match['Winner_Score']} - {blowout_match['Loser_Score']}).")
+        
+        if close_games:
+            c2.warning(f"**Nail-biters (Matches decided by 1-2 points):** \n\nOut of {len(close_games)} incredibly close games, {p1} won **{p1_close_wins}**, and {p2} won **{p2_close_wins}**.")
+        else:
+            c2.warning("**Nail-biters:** \n\nNone yet! Every single match between these two has been decided by 3 or more points.")
+
         st.write("### Game History Breakdown")
-        st.dataframe(pd.DataFrame(h2h_matches), use_container_width=True)
+        st.dataframe(pd.DataFrame(h2h_matches), use_container_width=True, hide_index=True)
     else:
         st.info("No recorded matches between these two players yet.")
 
@@ -170,7 +204,6 @@ elif view == "⚙️ Data Management":
     
     if st.session_state.matches:
         matches_df = pd.DataFrame(st.session_state.matches)
-        # Ensure correct column order for exporting
         if set(["Winner", "Winner_Score", "Loser_Score", "Loser"]).issubset(matches_df.columns):
             export_df = matches_df[["Winner", "Winner_Score", "Loser_Score", "Loser"]]
             csv_data = export_df.to_csv(index=False).encode('utf-8')
@@ -193,15 +226,11 @@ elif view == "⚙️ Data Management":
     if uploaded_file is not None:
         try:
             df_upload = pd.read_csv(uploaded_file)
-            
-            # This checks for both our English app columns and your old Hungarian spreadsheet columns
             has_app_cols = "Winner" in df_upload.columns and "Loser" in df_upload.columns
             has_sheet_cols = "Nyertes" in df_upload.columns and "Vesztes" in df_upload.columns
             
             if has_app_cols or has_sheet_cols:
                 imported_matches = []
-                
-                # Map column names based on the file type uploaded
                 col_w = "Winner" if has_app_cols else "Nyertes"
                 col_w_pts = "Winner_Score" if has_app_cols else "Nyertes pont"
                 col_l_pts = "Loser_Score" if has_app_cols else "Vesztes pont"
