@@ -1,64 +1,67 @@
 import streamlit as st
 import pandas as pd
+from streamlit_gsheets import GSheetsConnection
 
 st.set_page_config(page_title="Squash Leaderboard & ELO Tracker", layout="wide", page_icon="🎾")
 
 # --- CSS INJECTION TO FORCE CENTER ALIGNMENT ---
 st.markdown("""
     <style>
-    /* Target the exact Streamlit table containers to force center alignment */
-    [data-testid="stTable"] th {
-        text-align: center !important;
-    }
-    [data-testid="stTable"] td {
-        text-align: center !important;
-    }
+    [data-testid="stTable"] th { text-align: center !important; }
+    [data-testid="stTable"] td { text-align: center !important; }
     </style>
     """, unsafe_allow_html=True)
 # -----------------------------------------------
 
-# 1. Roster Initialization
 players_list = ["Ambrus", "Andris", "Dávid", "Donát", "Marci", "Matyi", "Ricsi", "Zoli"]
 
-if 'matches' not in st.session_state:
-    st.session_state.matches = []
+# --- GOOGLE SHEETS DATABASE CONNECTION ---
+# This creates the connection using the secret credentials you provided
+conn = st.connection("gsheets", type=GSheetsConnection)
 
-# 2. Advanced ELO & Stats Engine
+# Read the data from the Google Sheet (cache expires every 5 seconds to stay live)
+try:
+    df_database = conn.read(worksheet="Matches", usecols=[0, 1, 2, 3], ttl=5)
+    # Drop any completely empty rows
+    df_database = df_database.dropna(how="all")
+    # Convert it to the dictionary format the rest of our app expects
+    st.session_state.matches = df_database.to_dict('records')
+except Exception as e:
+    st.error(f"Could not connect to Google Sheets. Make sure the sheet name is 'Matches'. Error: {e}")
+    if 'matches' not in st.session_state:
+        st.session_state.matches = []
+# -----------------------------------------
+
 def calculate_stats(matches):
     elo = {p: 1200 for p in players_list}
     stats = {p: {"Played": 0, "Won": 0, "Pts_Scored": 0, "Pts_Conceded": 0} for p in players_list}
     K = 32
     
     for m in matches:
-        w = m["Winner"]
-        l = m["Loser"]
-        w_pts = m["Winner_Score"]
-        l_pts = m["Loser_Score"]
+        w = str(m["Winner"]).strip()
+        l = str(m["Loser"]).strip()
         
-        # Accumulate Traditional Stats
+        # Handle cases where empty rows sneak in
+        if w == 'nan' or l == 'nan' or not w or not l:
+            continue
+            
+        w_pts = int(m["Winner_Score"])
+        l_pts = int(m["Loser_Score"])
+        
         if w in stats:
-            stats[w]["Played"] += 1
-            stats[w]["Won"] += 1
-            stats[w]["Pts_Scored"] += w_pts
-            stats[w]["Pts_Conceded"] += l_pts
+            stats[w]["Played"] += 1; stats[w]["Won"] += 1
+            stats[w]["Pts_Scored"] += w_pts; stats[w]["Pts_Conceded"] += l_pts
         if l in stats:
             stats[l]["Played"] += 1
-            stats[l]["Pts_Scored"] += l_pts
-            stats[l]["Pts_Conceded"] += w_pts
+            stats[l]["Pts_Scored"] += l_pts; stats[l]["Pts_Conceded"] += w_pts
             
-        # Compute ELO
-        r_w = elo.get(w, 1200)
-        r_l = elo.get(l, 1200)
+        r_w, r_l = elo.get(w, 1200), elo.get(l, 1200)
         expected_w = 1 / (1 + 10 ** ((r_l - r_w) / 400))
-        
-        # Calculate the exact number of points that change hands
         points_exchanged = K * (1 - expected_w)
         
-        # Winner takes the points, loser drops the points
         elo[w] = round(r_w + points_exchanged)
         elo[l] = round(r_l - points_exchanged)
 
-    # Process metrics into a dataframe (Filtering out players with 0 matches)
     rows = []
     for p in players_list:
         s = stats[p]
@@ -69,19 +72,11 @@ def calculate_stats(matches):
         avg_pt = f"{(s['Pts_Scored'] / s['Played']):.2f}"
         avg_diff = f"{((s['Pts_Scored'] - s['Pts_Conceded']) / s['Played']):.2f}"
         
-        # Built explicitly to avoid SyntaxError during copy/paste
-        row_data = {
-            "Rank": 0,
-            "Player": p,
-            "🔮 ELO Rating": elo[p],
-            "Played": s["Played"],
-            "Won": s["Won"],
-            "Winrate": wr,
-            "Total Points": s["Pts_Scored"],
-            "Avg Points": avg_pt,
-            "Avg Diff": avg_diff
-        }
-        rows.append(row_data)
+        rows.append({
+            "Rank": 0, "Player": p, "🔮 ELO Rating": elo[p],
+            "Played": s["Played"], "Won": s["Won"], "Winrate": wr,
+            "Total Points": s["Pts_Scored"], "Avg Points": avg_pt, "Avg Diff": avg_diff
+        })
         
     if rows:
         df = pd.DataFrame(rows).sort_values(by="🔮 ELO Rating", ascending=False).reset_index(drop=True)
@@ -91,20 +86,17 @@ def calculate_stats(matches):
         
     return df, elo
 
-# Calculate global stats to use across pages
 df_leaderboard, current_elos = calculate_stats(st.session_state.matches)
 
-# 3. Application Interface Layout
 st.sidebar.title("🏸 Squash Dashboard")
-view = st.sidebar.radio("Navigation", ["🏆 Leaderboard", "📝 Record Match", "⚔️ 1v1 Head-to-Head", "⚙️ Data Management"])
+# Note: I removed the Data Management tab, because Google Sheets is your management now!
+view = st.sidebar.radio("Navigation", ["🏆 Leaderboard", "📝 Record Match", "⚔️ 1v1 Head-to-Head"])
 
 if view == "🏆 Leaderboard":
     st.title("🏆 Club Standings & Rankings")
-    
     if not st.session_state.matches:
-        st.warning("No matches recorded yet. Go to 'Data Management' to upload your CSV!")
+        st.warning("No matches recorded yet. Play a game!")
     else:
-        # st.table respects the CSS alignment override perfectly
         st.table(df_leaderboard.set_index("Rank"))
 
 elif view == "📝 Record Match":
@@ -112,43 +104,45 @@ elif view == "📝 Record Match":
     
     with st.form("match_submission", clear_on_submit=True):
         c1, c2 = st.columns(2)
-        
         with c1:
-            # Winner selection and points on the Left
             winner = st.selectbox("Winner", players_list, index=None, placeholder="Select the winner...")
             w_score = st.number_input("Winner Points", min_value=0, value=11, step=1)
-            
         with c2:
-            # Loser selection and points on the Right
             loser_options = [p for p in players_list if p != winner] if winner else players_list
             loser = st.selectbox("Loser", loser_options, index=None, placeholder="Select the loser...")
             
-            # Dynamic logic for jumping to the average loser score
             default_loser_points = 8
             if winner and loser:
                 relevant_matches = [m for m in st.session_state.matches if m["Winner"] == winner and m["Loser"] == loser]
                 if relevant_matches:
-                    avg_loser_score = sum(m["Loser_Score"] for m in relevant_matches) / len(relevant_matches)
+                    avg_loser_score = sum(int(m["Loser_Score"]) for m in relevant_matches) / len(relevant_matches)
                     default_loser_points = int(round(avg_loser_score))
                     
             l_score = st.number_input("Loser Points", min_value=0, value=default_loser_points, step=1)
             
             if winner and loser and default_loser_points != 8:
-                st.caption(f"*(Auto-filled with {loser}'s average score against {winner})*")
+                st.caption(f"*(Auto-filled with {loser}'s avg score against {winner})*")
                 
-        st.write("") # Add a little spacing before the button
-        submitted = st.form_submit_button("Save Match")
+        st.write("")
+        submitted = st.form_submit_button("Save Match to Cloud Database ☁️")
         
         if submitted:
             if not winner or not loser:
-                st.error("Please select both a winner and a loser before saving.")
+                st.error("Please select both a winner and a loser.")
             elif w_score <= l_score:
                 st.error("Error: Winner points must be strictly greater than loser points.")
             else:
-                st.session_state.matches.append({
-                    "Winner": winner, "Winner_Score": w_score, "Loser_Score": l_score, "Loser": loser
-                })
-                st.success(f"Match Saved! {winner} beat {loser} ({w_score}-{l_score})")
+                # Add to local state
+                new_match = {"Winner": winner, "Winner_Score": w_score, "Loser_Score": l_score, "Loser": loser}
+                st.session_state.matches.append(new_match)
+                
+                # Push the entirely new state to Google Sheets
+                updated_df = pd.DataFrame(st.session_state.matches)
+                conn.update(worksheet="Matches", data=updated_df)
+                
+                # Clear the cache so it pulls the fresh data immediately
+                st.cache_data.clear()
+                st.success(f"Match Saved to Google Sheets! {winner} beat {loser} ({w_score}-{l_score})")
                 st.rerun()
 
 elif view == "⚔️ 1v1 Head-to-Head":
@@ -156,25 +150,18 @@ elif view == "⚔️ 1v1 Head-to-Head":
     p1 = st.selectbox("Select Player One:", players_list)
     p2 = st.selectbox("Select Player Two:", [p for p in players_list if p != p1])
     
-    # Current Elo for Predictions
-    elo_p1 = current_elos.get(p1, 1200)
-    elo_p2 = current_elos.get(p2, 1200)
-    
-    # Filter historic matchups
+    elo_p1, elo_p2 = current_elos.get(p1, 1200), current_elos.get(p2, 1200)
     h2h_matches = [m for m in st.session_state.matches if (m["Winner"] == p1 and m["Loser"] == p2) or (m["Winner"] == p2 and m["Loser"] == p1)]
     total_games = len(h2h_matches)
     
-    # ELO Prediction Math
     K = 32
     exp_p1_win = 1 / (1 + 10 ** ((elo_p2 - elo_p1) / 400))
     pts_if_p1_wins = round(K * (1 - exp_p1_win))
-    
     exp_p2_win = 1 / (1 + 10 ** ((elo_p1 - elo_p2) / 400))
     pts_if_p2_wins = round(K * (1 - exp_p2_win))
 
     st.subheader(f"Current Matchup: {p1} vs {p2}")
     
-    # Show Current ELO & Stakes
     st.markdown("### 🔮 Match Stakes")
     col_elo1, col_elo2 = st.columns(2)
     col_elo1.metric(f"{p1} Current Elo", elo_p1)
@@ -189,25 +176,22 @@ elif view == "⚔️ 1v1 Head-to-Head":
         p1_wins = sum(1 for m in h2h_matches if m["Winner"] == p1)
         p2_wins = sum(1 for m in h2h_matches if m["Winner"] == p2)
         
-        p1_pts = sum(m["Winner_Score"] if m["Winner"] == p1 else m["Loser_Score"] for m in h2h_matches)
-        p2_pts = sum(m["Winner_Score"] if m["Winner"] == p2 else m["Loser_Score"] for m in h2h_matches)
+        p1_pts = sum(int(m["Winner_Score"]) if m["Winner"] == p1 else int(m["Loser_Score"]) for m in h2h_matches)
+        p2_pts = sum(int(m["Winner_Score"]) if m["Winner"] == p2 else int(m["Loser_Score"]) for m in h2h_matches)
         
         p1_wr = f"{(p1_wins / total_games * 100):.0f}%"
         p2_wr = f"{(p2_wins / total_games * 100):.0f}%"
         
-        p1_avg_pts = p1_pts / total_games
-        p2_avg_pts = p2_pts / total_games
+        p1_avg_pts, p2_avg_pts = p1_pts / total_games, p2_pts / total_games
         
-        # Fun Stats calculations
-        blowout_match = max(h2h_matches, key=lambda m: abs(m['Winner_Score'] - m['Loser_Score']))
-        blowout_margin = blowout_match['Winner_Score'] - blowout_match['Loser_Score']
+        blowout_match = max(h2h_matches, key=lambda m: abs(int(m['Winner_Score']) - int(m['Loser_Score'])))
+        blowout_margin = int(blowout_match['Winner_Score']) - int(blowout_match['Loser_Score'])
         blowout_winner = blowout_match['Winner']
         
-        close_games = [m for m in h2h_matches if abs(m['Winner_Score'] - m['Loser_Score']) <= 2]
+        close_games = [m for m in h2h_matches if abs(int(m['Winner_Score']) - int(m['Loser_Score'])) <= 2]
         p1_close_wins = sum(1 for m in close_games if m['Winner'] == p1)
         p2_close_wins = sum(1 for m in close_games if m['Winner'] == p2)
         
-        # Show Lifetime Stats
         st.markdown("### 📊 Lifetime History")
         col_stat1, col_stat2 = st.columns(2)
         
@@ -227,73 +211,14 @@ elif view == "⚔️ 1v1 Head-to-Head":
         
         st.markdown("### 🌶️ Insightful Data")
         c1, c2 = st.columns(2)
-        c1.info(f"**Biggest Blowout:** \n\n{blowout_winner} crushed the opponent by a massive **{blowout_margin} points** ({blowout_match['Winner_Score']} - {blowout_match['Loser_Score']}).")
+        c1.info(f"**Biggest Blowout:** \n\n{blowout_winner} crushed by **{blowout_margin} points** ({blowout_match['Winner_Score']} - {blowout_match['Loser_Score']}).")
         
         if close_games:
-            c2.warning(f"**Nail-biters (Matches decided by 1-2 points):** \n\nOut of {len(close_games)} incredibly close games, {p1} won **{p1_close_wins}**, and {p2} won **{p2_close_wins}**.")
+            c2.warning(f"**Nail-biters (1-2 point diff):** \n\nOut of {len(close_games)} close games, {p1} won **{p1_close_wins}**, and {p2} won **{p2_close_wins}**.")
         else:
-            c2.warning("**Nail-biters:** \n\nNone yet! Every single match between these two has been decided by 3 or more points.")
+            c2.warning("**Nail-biters:** \n\nNone yet!")
 
         st.write("### Game History Breakdown")
-        
-        # Format the 1v1 table
         st.table(pd.DataFrame(h2h_matches).reset_index(drop=True))
     else:
         st.info("No recorded matches between these two players yet.")
-
-elif view == "⚙️ Data Management":
-    st.title("⚙️ Manage Your Database")
-    
-    st.subheader("📥 Backup Your Data")
-    st.write("Download your current match history to your device so you never lose it.")
-    
-    if st.session_state.matches:
-        matches_df = pd.DataFrame(st.session_state.matches)
-        if set(["Winner", "Winner_Score", "Loser_Score", "Loser"]).issubset(matches_df.columns):
-            export_df = matches_df[["Winner", "Winner_Score", "Loser_Score", "Loser"]]
-            csv_data = export_df.to_csv(index=False).encode('utf-8')
-            
-            st.download_button(
-                label="💾 Download Database Backup (CSV)",
-                data=csv_data,
-                file_name="squash_database_backup.csv",
-                mime="text/csv"
-            )
-    else:
-        st.info("No matches recorded yet. Add some matches to download a backup.")
-        
-    st.divider()
-
-    st.subheader("📤 Upload Historical Matches")
-    st.write("Upload a previously saved CSV backup to restore your data.")
-    uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
-    
-    if uploaded_file is not None:
-        try:
-            df_upload = pd.read_csv(uploaded_file)
-            has_app_cols = "Winner" in df_upload.columns and "Loser" in df_upload.columns
-            has_sheet_cols = "Nyertes" in df_upload.columns and "Vesztes" in df_upload.columns
-            
-            if has_app_cols or has_sheet_cols:
-                imported_matches = []
-                col_w = "Winner" if has_app_cols else "Nyertes"
-                col_w_pts = "Winner_Score" if has_app_cols else "Nyertes pont"
-                col_l_pts = "Loser_Score" if has_app_cols else "Vesztes pont"
-                col_l = "Loser" if has_app_cols else "Vesztes"
-                
-                for index, row in df_upload.dropna(subset=[col_w, col_l]).iterrows():
-                    imported_matches.append({
-                        "Winner": str(row[col_w]).strip(),
-                        "Winner_Score": int(row[col_w_pts]),
-                        "Loser_Score": int(row[col_l_pts]),
-                        "Loser": str(row[col_l]).strip()
-                    })
-                
-                if st.button("Load Data & Overwrite Current Memory"):
-                    st.session_state.matches = imported_matches
-                    st.success(f"Successfully loaded {len(imported_matches)} matches!")
-                    st.rerun()
-            else:
-                st.error("Could not find the correct columns in the CSV. Make sure you upload a valid backup.")
-        except Exception as e:
-            st.error(f"Error reading file: {e}")
