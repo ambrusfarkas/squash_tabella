@@ -66,22 +66,31 @@ if view == "🏆 Leaderboard":
     st.table(df_leaderboard.style.hide(axis="index"))
     
     st.subheader("🕒 Recent Matches")
-    recent_df = pd.DataFrame(st.session_state.matches[-10:]).iloc[::-1]
-    recent_df = recent_df.rename(columns={"Winner_Score": "Winner Score", "Loser_Score": "Loser Score"})
-    recent_df["Winner Score"] = recent_df["Winner Score"].astype(int)
-    recent_df["Loser Score"] = recent_df["Loser Score"].astype(int)
+    recent_df = pd.DataFrame(st.session_state.matches[-10:])
+    recent_df["Winner_Score"] = recent_df["Winner_Score"].astype(int)
+    recent_df["Loser_Score"] = recent_df["Loser_Score"].astype(int)
 
     if not st.session_state.edit_mode:
-        st.table(recent_df)
+        st.table(recent_df.rename(columns={"Winner_Score": "Winner Score", "Loser_Score": "Loser Score"}))
         if st.button("Edit Matches"):
             st.session_state.edit_mode = True
             st.rerun()
     else:
-        edited_df = st.data_editor(recent_df, use_container_width=True)
+        # Data Editor with Dropdowns
+        edited_df = st.data_editor(
+            recent_df, 
+            hide_index=True, 
+            use_container_width=True,
+            column_config={
+                "Winner": st.column_config.SelectboxColumn(options=players_list),
+                "Loser": st.column_config.SelectboxColumn(options=players_list),
+                "Winner_Score": st.column_config.NumberColumn(min_value=0),
+                "Loser_Score": st.column_config.NumberColumn(min_value=0)
+            }
+        )
         if st.button("Save Changes & Sync"):
-            final_df = edited_df.rename(columns={"Winner Score": "Winner_Score", "Loser Score": "Loser_Score"})
             all_matches_df = pd.DataFrame(st.session_state.matches)
-            all_matches_df.iloc[-10:] = final_df.iloc[::-1]
+            all_matches_df.iloc[-10:] = edited_df
             conn.update(spreadsheet=SHEET_URL, worksheet="Matches", data=all_matches_df)
             st.session_state.edit_mode = False
             st.cache_data.clear()
