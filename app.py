@@ -76,53 +76,59 @@ if view == "🏆 Leaderboard":
     if not st.session_state.matches:
         st.warning("No matches recorded yet. Go to 'Data Management' to upload your CSV!")
     else:
-        # Style the dataframe for perfect centering
-        styled_df = df_leaderboard.style.set_properties(**{
+        # Use st.table with Styler to absolutely guarantee perfect centering
+        styled_df = df_leaderboard.style.hide(axis="index").set_properties(**{
             'text-align': 'center'
         }).set_table_styles([
             {'selector': 'th', 'props': [('text-align', 'center')]},
             {'selector': 'td', 'props': [('text-align', 'center')]}
         ])
         
-        st.dataframe(styled_df, use_container_width=True, hide_index=True)
+        st.table(styled_df)
 
 elif view == "📝 Record Match":
     st.title("📝 Enter Match Result")
     
-    # Empty defaults to fix the selection bug
-    winner = st.selectbox("Winner", players_list, index=None, placeholder="Select the winner...")
-    
-    # Filter the winner out of the loser list dynamically
-    loser_options = [p for p in players_list if p != winner] if winner else players_list
-    loser = st.selectbox("Loser", loser_options, index=None, placeholder="Select the loser...")
-    
-    # Dynamic logic for jumping to the average loser score
-    default_loser_points = 8
-    if winner and loser:
-        relevant_matches = [m for m in st.session_state.matches if m["Winner"] == winner and m["Loser"] == loser]
-        if relevant_matches:
-            avg_loser_score = sum(m["Loser_Score"] for m in relevant_matches) / len(relevant_matches)
-            default_loser_points = int(round(avg_loser_score))
+    with st.form("match_submission", clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        
+        with c1:
+            # Winner selection and points on the Left
+            winner = st.selectbox("Winner", players_list, index=None, placeholder="Select the winner...")
+            w_score = st.number_input("Winner Points", min_value=0, value=11, step=1)
             
-    c1, c2 = st.columns(2)
-    with c1:
-        w_score = st.number_input("Winner Points", min_value=0, value=11, step=1)
-    with c2:
-        l_score = st.number_input("Loser Points", min_value=0, value=default_loser_points, step=1)
-        if winner and loser and default_loser_points != 8:
-            st.caption(f"*(Auto-filled with {loser}'s average score against {winner})*")
+        with c2:
+            # Loser selection and points on the Right
+            loser_options = [p for p in players_list if p != winner] if winner else players_list
+            loser = st.selectbox("Loser", loser_options, index=None, placeholder="Select the loser...")
             
-    if st.button("Save Match"):
-        if not winner or not loser:
-            st.error("Please select both a winner and a loser before saving.")
-        elif w_score <= l_score:
-            st.error("Error: Winner points must be strictly greater than loser points.")
-        else:
-            st.session_state.matches.append({
-                "Winner": winner, "Winner_Score": w_score, "Loser_Score": l_score, "Loser": loser
-            })
-            st.success(f"Match Saved! {winner} beat {loser} ({w_score}-{l_score})")
-            st.rerun()
+            # Dynamic logic for jumping to the average loser score
+            default_loser_points = 8
+            if winner and loser:
+                relevant_matches = [m for m in st.session_state.matches if m["Winner"] == winner and m["Loser"] == loser]
+                if relevant_matches:
+                    avg_loser_score = sum(m["Loser_Score"] for m in relevant_matches) / len(relevant_matches)
+                    default_loser_points = int(round(avg_loser_score))
+                    
+            l_score = st.number_input("Loser Points", min_value=0, value=default_loser_points, step=1)
+            
+            if winner and loser and default_loser_points != 8:
+                st.caption(f"*(Auto-filled with {loser}'s average score against {winner})*")
+                
+        st.write("") # Add a little spacing before the button
+        submitted = st.form_submit_button("Save Match")
+        
+        if submitted:
+            if not winner or not loser:
+                st.error("Please select both a winner and a loser before saving.")
+            elif w_score <= l_score:
+                st.error("Error: Winner points must be strictly greater than loser points.")
+            else:
+                st.session_state.matches.append({
+                    "Winner": winner, "Winner_Score": w_score, "Loser_Score": l_score, "Loser": loser
+                })
+                st.success(f"Match Saved! {winner} beat {loser} ({w_score}-{l_score})")
+                st.rerun()
 
 elif view == "⚔️ 1v1 Head-to-Head":
     st.title("⚔️ Rivalry Statistics")
@@ -209,14 +215,14 @@ elif view == "⚔️ 1v1 Head-to-Head":
 
         st.write("### Game History Breakdown")
         
-        # Apply centering to the Head-to-Head dataframe as well
-        styled_h2h = pd.DataFrame(h2h_matches).style.set_properties(**{
+        # Apply centering to the Head-to-Head dataframe as well using st.table
+        styled_h2h = pd.DataFrame(h2h_matches).style.hide(axis="index").set_properties(**{
             'text-align': 'center'
         }).set_table_styles([
             {'selector': 'th', 'props': [('text-align', 'center')]},
             {'selector': 'td', 'props': [('text-align', 'center')]}
         ])
-        st.dataframe(styled_h2h, use_container_width=True, hide_index=True)
+        st.table(styled_h2h)
     else:
         st.info("No recorded matches between these two players yet.")
 
