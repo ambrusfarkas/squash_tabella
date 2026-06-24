@@ -23,7 +23,7 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 # Read Data safely
 try:
-    # Set explicitly back to "Matches"
+    # Explicitly targeted to the "Matches" tab
     df_database = conn.read(spreadsheet=SHEET_URL, worksheet="Matches", usecols=[0, 1, 2, 3], ttl=0) 
     df_database = df_database.dropna(how="all")
     st.session_state.matches = df_database.to_dict('records')
@@ -90,7 +90,7 @@ def calculate_stats(matches):
         
     if rows:
         df = pd.DataFrame(rows).sort_values(by="🔮 ELO Rating", ascending=False).reset_index(drop=True)
-        # Restore the explicit 1, 2, 3 ranking
+        # Add ranking numbers 1, 2, 3...
         df["Rank"] = df.index + 1
     else:
         df = pd.DataFrame(columns=["Rank", "Player", "🔮 ELO Rating", "Played", "Won", "Winrate", "Total Points", "Avg Points", "Avg Diff"])
@@ -107,71 +107,73 @@ if view == "🏆 Leaderboard":
     if not st.session_state.matches:
         st.warning("No matches recorded yet. Play a game!")
     else:
-        # Hide the blank index column, keep the generated 'Rank' column
         st.table(df_leaderboard.style.hide(axis="index"))
 
 elif view == "📝 Record Match":
     st.title("📝 Enter Match Result")
     
-    with st.form("match_submission", clear_on_submit=True):
-        c1, c2 = st.columns(2)
-        with c1:
-            winner = st.selectbox("Winner", players_list, index=None, placeholder="Select the winner...")
-            w_score = st.number_input("Winner Points", min_value=0, value=11, step=1)
-        with c2:
-            loser_options = [p for p in players_list if p != winner] if winner else players_list
-            loser = st.selectbox("Loser", loser_options, index=None, placeholder="Select the loser...")
-            
-            default_loser_points = 8
-            if winner and loser:
-                relevant_matches = [m for m in st.session_state.matches if m.get("Winner") == winner and m.get("Loser") == loser]
-                if relevant_matches:
-                    try:
-                        avg_loser_score = sum(int(m.get("Loser_Score", 0)) for m in relevant_matches) / len(relevant_matches)
-                        default_loser_points = int(round(avg_loser_score))
-                    except ValueError:
-                        pass
-                    
-            l_score = st.number_input("Loser Points", min_value=0, value=default_loser_points, step=1)
-            
-            if winner and loser and default_loser_points != 8:
-                st.caption(f"*(Auto-filled with {loser}'s avg score against {winner})*")
-                
-        st.write("")
-        submitted = st.form_submit_button("Save Match to Cloud Database ☁️")
+    # Removed the st.form wrapper completely to allow real-time dynamic updates
+    c1, c2 = st.columns(2)
+    with c1:
+        winner = st.selectbox("Winner", players_list, index=None, placeholder="Select the winner...")
+        w_score = st.number_input("Winner Points", min_value=0, value=11, step=1)
         
-        if submitted:
-            if not winner or not loser:
-                st.error("Please select both a winner and a loser.")
-            elif w_score <= l_score:
-                st.error("Error: Winner points must be strictly greater than loser points.")
-            else:
-                # 1. Add new match to session state
-                new_match = {
-                    "Winner": winner, 
-                    "Winner_Score": int(w_score), 
-                    "Loser_Score": int(l_score), 
-                    "Loser": loser
-                }
-                st.session_state.matches.append(new_match)
-                
-                # 2. Convert state to safe DataFrame
-                updated_df = pd.DataFrame(st.session_state.matches)
-                
-                # Force exact columns so Google Sheets doesn't reject it
-                updated_df = updated_df[["Winner", "Winner_Score", "Loser_Score", "Loser"]]
-                
+    with c2:
+        loser_options = [p for p in players_list if p != winner] if winner else players_list
+        loser = st.selectbox("Loser", loser_options, index=None, placeholder="Select the loser...")
+        
+        default_loser_points = 8
+        if winner and loser:
+            relevant_matches = [m for m in st.session_state.matches if m.get("Winner") == winner and m.get("Loser") == loser]
+            if relevant_matches:
                 try:
-                    # 3. Push to Google Sheets explicitly (Matches)
-                    conn.update(spreadsheet=SHEET_URL, worksheet="Matches", data=updated_df)
-                    
-                    # 4. Force hard reset of caches
-                    st.cache_data.clear()
-                    
-                    st.success(f"Match Saved to Google Sheets! {winner} beat {loser} ({w_score}-{l_score})")
-                    st.rerun() # Refresh app to show new leaderboard
-                except Exception as e:
-                    st.error(f"Failed to save to Google Sheets: {e}")
+                    avg_loser_score = sum(int(m.get("Loser_Score", 0)) for m in relevant_matches) / len(relevant_matches)
+                    default_loser_points = int(round(avg_loser_score))
+                except ValueError:
+                    pass
+                
+        l_score = st.number_input("Loser Points", min_value=0, value=default_loser_points, step=1)
+        
+        if winner and loser and default_loser_points != 8:
+            st.caption(f"*(Auto-filled with {loser}'s avg score against {winner})*")
+            
+    st.write("")
+    
+    # Standard button instead of a form submit button
+    submitted = st.button("Save Match to Cloud Database ☁️")
+    
+    if submitted:
+        if not winner or not loser:
+            st.error("Please select both a winner and a loser.")
+        elif w_score <= l_score:
+            st.error("Error: Winner points must be strictly greater than loser points.")
+        else:
+            # 1. Add new match to session state
+            new_match = {
+                "Winner": winner, 
+                "Winner_Score": int(w_score), 
+                "Loser_Score": int(l_score), 
+                "Loser": loser
+            }
+            st.session_state.matches.append(new_match)
+            
+            # 2. Convert state to safe DataFrame
+            updated_df = pd.DataFrame(st.session_state.matches)
+            
+            # Force exact columns so Google Sheets doesn't reject it
+            updated_df = updated_df[["Winner", "Winner_Score", "Loser_Score", "Loser"]]
+            
+            try:
+                # 3. Push to Google Sheets explicitly (Matches)
+                conn.update(spreadsheet=SHEET_URL, worksheet="Matches", data=updated_df)
+                
+                # 4. Force hard reset of caches
+                st.cache_data.clear()
+                
+                st.success(f"Match Saved to Google Sheets! {winner} beat {loser} ({w_score}-{l_score})")
+                st.rerun() # Refresh app to reset inputs and show new leaderboard
+            except Exception as e:
+                st.error(f"Failed to save to Google Sheets: {e}")
 
 elif view == "⚔️ 1v1 Head-to-Head":
     st.title("⚔️ Rivalry Statistics")
