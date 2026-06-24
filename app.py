@@ -25,24 +25,30 @@ if 'matches' not in st.session_state:
 
 # 2. Advanced ELO & Stats Engine
 def calculate_stats(matches):
-    elo = {p: 1200 for p in players_list} # Base ELO starting score
+    elo = {p: 1200 for p in players_list}
     stats = {p: {"Played": 0, "Won": 0, "Pts_Scored": 0, "Pts_Conceded": 0} for p in players_list}
-    K = 32 # ELO volatility factor
+    K = 32
     
     for m in matches:
-        w, l = m["Winner"], m["Loser"]
-        w_pts, l_pts = m["Winner_Score"], m["Loser_Score"]
+        w = m["Winner"]
+        l = m["Loser"]
+        w_pts = m["Winner_Score"]
+        l_pts = m["Loser_Score"]
         
         # Accumulate Traditional Stats
         if w in stats:
-            stats[w]["Played"] += 1; stats[w]["Won"] += 1
-            stats[w]["Pts_Scored"] += w_pts; stats[w]["Pts_Conceded"] += l_pts
+            stats[w]["Played"] += 1
+            stats[w]["Won"] += 1
+            stats[w]["Pts_Scored"] += w_pts
+            stats[w]["Pts_Conceded"] += l_pts
         if l in stats:
             stats[l]["Played"] += 1
-            stats[l]["Pts_Scored"] += l_pts; stats[l]["Pts_Conceded"] += w_pts
+            stats[l]["Pts_Scored"] += l_pts
+            stats[l]["Pts_Conceded"] += w_pts
             
         # Compute ELO
-        r_w, r_l = elo.get(w, 1200), elo.get(l, 1200)
+        r_w = elo.get(w, 1200)
+        r_l = elo.get(l, 1200)
         expected_w = 1 / (1 + 10 ** ((r_l - r_w) / 400))
         
         # Calculate the exact number of points that change hands
@@ -57,17 +63,25 @@ def calculate_stats(matches):
     for p in players_list:
         s = stats[p]
         if s["Played"] == 0:
-            continue # Skip adding to leaderboard if they haven't played
+            continue
             
         wr = f"{(s['Won'] / s['Played'] * 100):.0f}%"
         avg_pt = f"{(s['Pts_Scored'] / s['Played']):.2f}"
         avg_diff = f"{((s['Pts_Scored'] - s['Pts_Conceded']) / s['Played']):.2f}"
         
-        rows.append({
-            "Rank": 0, "Player": p, "🔮 ELO Rating": elo[p],
-            "Played": s["Played"], "Won": s["Won"], "Winrate": wr,
-            "Total Points": s["Pts_Scored"], "Avg Points": avg_pt, "Avg Diff": avg_diff
-        })
+        # Built explicitly to avoid SyntaxError during copy/paste
+        row_data = {
+            "Rank": 0,
+            "Player": p,
+            "🔮 ELO Rating": elo[p],
+            "Played": s["Played"],
+            "Won": s["Won"],
+            "Winrate": wr,
+            "Total Points": s["Pts_Scored"],
+            "Avg Points": avg_pt,
+            "Avg Diff": avg_diff
+        }
+        rows.append(row_data)
         
     if rows:
         df = pd.DataFrame(rows).sort_values(by="🔮 ELO Rating", ascending=False).reset_index(drop=True)
@@ -90,7 +104,7 @@ if view == "🏆 Leaderboard":
     if not st.session_state.matches:
         st.warning("No matches recorded yet. Go to 'Data Management' to upload your CSV!")
     else:
-        # The CSS at the top handles the centering now, so we just hide the index
+        # st.table respects the CSS alignment override perfectly
         st.table(df_leaderboard.set_index("Rank"))
 
 elif view == "📝 Record Match":
@@ -222,7 +236,7 @@ elif view == "⚔️ 1v1 Head-to-Head":
 
         st.write("### Game History Breakdown")
         
-        # Format the 1v1 table to use the CSS override
+        # Format the 1v1 table
         st.table(pd.DataFrame(h2h_matches).reset_index(drop=True))
     else:
         st.info("No recorded matches between these two players yet.")
