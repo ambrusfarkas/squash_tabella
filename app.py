@@ -31,32 +31,47 @@ def calculate_stats(matches):
     elo = {p: 1200 for p in players_list}
     stats = {p: {"Played": 0, "Won": 0, "Pts_Scored": 0, "Pts_Conceded": 0} for p in players_list}
     K = 32
+    
+    # Initialize history to track the Elo timeline
+    elo_history = [{"Match": 0, **elo}]
+    match_count = 0
+    
     for m in matches:
         w, l = str(m.get("Winner", "")).strip(), str(m.get("Loser", "")).strip()
         if w == 'nan' or l == 'nan' or not w or not l: continue
         try:
             w_pts, l_pts = int(m.get("Winner_Score", 0)), int(m.get("Loser_Score", 0))
         except ValueError: continue
+        
         if w in stats:
             stats[w]["Played"] += 1; stats[w]["Won"] += 1
             stats[w]["Pts_Scored"] += w_pts; stats[w]["Pts_Conceded"] += l_pts
         if l in stats:
             stats[l]["Played"] += 1
             stats[l]["Pts_Scored"] += l_pts; stats[l]["Pts_Conceded"] += w_pts
+            
         r_w, r_l = elo.get(w, 1200), elo.get(l, 1200)
         expected_w = 1 / (1 + 10 ** ((r_l - r_w) / 400))
         elo[w] = round(r_w + (K * (1 - expected_w)))
         elo[l] = round(r_l - (K * (1 - expected_w)))
+        
+        # Save a snapshot of the Elos after this match
+        match_count += 1
+        elo_history.append({"Match": match_count, **elo})
+        
     rows = []
     for p in players_list:
         s = stats[p]
         if s["Played"] == 0: continue
         rows.append({"Rank": 0, "Player": p, "🔮 ELO Rating": elo[p], "Played": s["Played"], "Won": s["Won"], "Winrate": f"{(s['Won'] / s['Played'] * 100):.0f}%", "Total Points": s['Pts_Scored'], "Avg Points": f"{(s['Pts_Scored'] / s['Played']):.1f}", "Avg Diff": f"{((s['Pts_Scored'] - s['Pts_Conceded']) / s['Played']):.1f}"})
+    
     df = pd.DataFrame(rows).sort_values(by="🔮 ELO Rating", ascending=False).reset_index(drop=True)
     df["Rank"] = df.index + 1
-    return df, elo
+    
+    return df, elo, elo_history
 
-df_leaderboard, current_elos = calculate_stats(st.session_state.matches)
+# Unpack the new elo_history
+df_leaderboard, current_elos, elo_history = calculate_stats(st.session_state.matches)
 
 st.sidebar.title("🏸 Squash Dashboard")
 view = st.sidebar.radio("Navigation", ["🏆 Leaderboard", "📝 Record Match", "⚔️ 1v1 Head-to-Head"])
@@ -90,12 +105,24 @@ if view == "🏆 Leaderboard":
         )
         if st.button("Save Changes & Sync"):
             all_matches_df = pd.DataFrame(st.session_state.matches)
-            # Map the edited DataFrame back into its original chronological spot
             all_matches_df.iloc[-10:] = edited_df.iloc[::-1]
             conn.update(spreadsheet=SHEET_URL, worksheet="Matches", data=all_matches_df)
             st.session_state.edit_mode = False
             st.cache_data.clear()
             st.rerun()
+            
+    # --- NEW ELO HISTORY CHART ---
+    st.divider()
+    st.subheader("📈 Elo Rating History")
+    if len(elo_history) > 1:
+        history_df = pd.DataFrame(elo_history).set_index("Match")
+        
+        # Only show players who have actually played matches
+        active_players = df_leaderboard["Player"].tolist()
+        if active_players:
+            st.line_chart(history_df[active_players])
+    else:
+        st.info("Play some matches to see your Elo history chart!")
 
 elif view == "📝 Record Match":
     st.title("📝 Enter Match Result")
@@ -121,13 +148,11 @@ elif view == "⚔️ 1v1 Head-to-Head":
     active = df_leaderboard["Player"].tolist()
     if len(active) < 2: st.info("Not enough data.")
     else:
-        # FIX: Split back into two lines to avoid the NameError
         p1 = st.selectbox("Player One:", active)
         p2 = st.selectbox("Player Two:", [p for p in active if p != p1])
         
         h2h = [m for m in st.session_state.matches if (m.get("Winner") == p1 and m.get("Loser") == p2) or (m.get("Winner") == p2 and m.get("Loser") == p1)]
         if h2h:
-            # Stats calculations
             elo_p1, elo_p2 = current_elos.get(p1, 1200), current_elos.get(p2, 1200)
             total_games = len(h2h)
             
