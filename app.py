@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import altair as alt
 from streamlit_gsheets import GSheetsConnection
 
 st.set_page_config(page_title="Squash Tabella", layout="wide", page_icon="🎾")
@@ -111,16 +112,29 @@ if view == "🏆 Leaderboard":
             st.cache_data.clear()
             st.rerun()
             
-    # --- NEW ELO HISTORY CHART ---
+    # --- NEW TALL ELO HISTORY CHART ---
     st.divider()
     st.subheader("📈 Elo Rating History")
     if len(elo_history) > 1:
-        history_df = pd.DataFrame(elo_history).set_index("Match")
-        
-        # Only show players who have actually played matches
+        history_df = pd.DataFrame(elo_history)
         active_players = df_leaderboard["Player"].tolist()
+        
         if active_players:
-            st.line_chart(history_df[active_players])
+            # Reformat the data structure to work with Altair Charting
+            melted_df = history_df.melt(id_vars="Match", value_vars=active_players, var_name="Player", value_name="Elo")
+            
+            # Build an explicit interactive chart
+            chart = alt.Chart(melted_df).mark_line(size=3).encode(
+                x=alt.X("Match:Q", title="Matches Played (Timeline)"),
+                # Force the Y-axis to start at exactly 0
+                y=alt.Y("Elo:Q", scale=alt.Scale(zero=True), title="Elo Rating"),
+                color=alt.Color("Player:N", title="Player"),
+                tooltip=["Match", "Player", "Elo"]
+            ).properties(
+                height=700 # Made the chart extremely tall!
+            ).interactive()
+            
+            st.altair_chart(chart, use_container_width=True)
     else:
         st.info("Play some matches to see your Elo history chart!")
 
