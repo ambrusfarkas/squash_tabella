@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from streamlit_gsheets import GSheetsConnection
 
-st.set_page_config(page_title="Squash Leaderboard & ELO Tracker", layout="wide", page_icon="🎾")
+st.set_page_config(page_title="Squash Tabella", layout="wide", page_icon="🎾")
 
 # --- CSS INJECTION TO FORCE CENTER ALIGNMENT ---
 st.markdown("""
