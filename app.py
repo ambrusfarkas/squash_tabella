@@ -71,14 +71,14 @@ if view == "🏆 Leaderboard":
     recent_df["Loser_Score"] = recent_df["Loser_Score"].astype(int)
 
     if not st.session_state.edit_mode:
-        st.table(recent_df.rename(columns={"Winner_Score": "Winner Score", "Loser_Score": "Loser Score"}))
+        st.table(recent_df.rename(columns={"Winner_Score": "Winner Score", "Loser_Score": "Loser Score"}).iloc[::-1])
         if st.button("Edit Matches"):
             st.session_state.edit_mode = True
             st.rerun()
     else:
         # Data Editor with Dropdowns
         edited_df = st.data_editor(
-            recent_df, 
+            recent_df.iloc[::-1], 
             hide_index=True, 
             use_container_width=True,
             column_config={
@@ -90,7 +90,8 @@ if view == "🏆 Leaderboard":
         )
         if st.button("Save Changes & Sync"):
             all_matches_df = pd.DataFrame(st.session_state.matches)
-            all_matches_df.iloc[-10:] = edited_df
+            # Map the edited DataFrame back into its original chronological spot
+            all_matches_df.iloc[-10:] = edited_df.iloc[::-1]
             conn.update(spreadsheet=SHEET_URL, worksheet="Matches", data=all_matches_df)
             st.session_state.edit_mode = False
             st.cache_data.clear()
@@ -120,10 +121,68 @@ elif view == "⚔️ 1v1 Head-to-Head":
     active = df_leaderboard["Player"].tolist()
     if len(active) < 2: st.info("Not enough data.")
     else:
-        p1, p2 = st.selectbox("Player One:", active), st.selectbox("Player Two:", [p for p in active if p != p1])
+        # FIX: Split back into two lines to avoid the NameError
+        p1 = st.selectbox("Player One:", active)
+        p2 = st.selectbox("Player Two:", [p for p in active if p != p1])
+        
         h2h = [m for m in st.session_state.matches if (m.get("Winner") == p1 and m.get("Loser") == p2) or (m.get("Winner") == p2 and m.get("Loser") == p1)]
         if h2h:
+            # Stats calculations
+            elo_p1, elo_p2 = current_elos.get(p1, 1200), current_elos.get(p2, 1200)
+            total_games = len(h2h)
+            
+            K = 32
+            exp_p1_win = 1 / (1 + 10 ** ((elo_p2 - elo_p1) / 400))
+            pts_if_p1_wins = round(K * (1 - exp_p1_win))
+            exp_p2_win = 1 / (1 + 10 ** ((elo_p1 - elo_p2) / 400))
+            pts_if_p2_wins = round(K * (1 - exp_p2_win))
+
+            st.subheader(f"Current Matchup: {p1} vs {p2}")
+            st.markdown("### 🔮 Match Stakes")
+            col_elo1, col_elo2 = st.columns(2)
+            col_elo1.metric(f"{p1} Current Elo", elo_p1)
+            col_elo2.metric(f"{p2} Current Elo", elo_p2)
+            st.info(f"**If {p1} wins:** {p1} gains +{pts_if_p1_wins} Elo, {p2} drops -{pts_if_p1_wins} Elo. \n\n"
+                    f"**If {p2} wins:** {p2} gains +{pts_if_p2_wins} Elo, {p1} drops -{pts_if_p2_wins} Elo.")
+            
+            st.divider()
+            
+            p1_wins = sum(1 for m in h2h if m.get("Winner") == p1)
+            p2_wins = sum(1 for m in h2h if m.get("Winner") == p2)
+            
+            p1_pts = sum(int(m.get("Winner_Score", 0)) if m.get("Winner") == p1 else int(m.get("Loser_Score", 0)) for m in h2h)
+            p2_pts = sum(int(m.get("Winner_Score", 0)) if m.get("Winner") == p2 else int(m.get("Loser_Score", 0)) for m in h2h)
+            
+            p1_wr = f"{(p1_wins / total_games * 100):.0f}%"
+            p2_wr = f"{(p2_wins / total_games * 100):.0f}%"
+            
+            p1_avg_pts, p2_avg_pts = p1_pts / total_games, p2_pts / total_games
+            
+            blowout_match = max(h2h, key=lambda m: abs(int(m.get('Winner_Score', 0)) - int(m.get('Loser_Score', 0))))
+            blowout_margin = int(blowout_match.get('Winner_Score', 0)) - int(blowout_match.get('Loser_Score', 0))
+            blowout_winner = blowout_match.get('Winner')
+            
+            close_games = [m for m in h2h if abs(int(m.get('Winner_Score', 0)) - int(m.get('Loser_Score', 0))) <= 2]
+            p1_close_wins = sum(1 for m in close_games if m.get('Winner') == p1)
+            p2_close_wins = sum(1 for m in close_games if m.get('Winner') == p2)
+            
+            st.markdown("### 📊 Lifetime History")
+            col_stat1, col_stat2 = st.columns(2)
+            col_stat1.markdown(f"#### {p1} Stats"); col_stat1.metric("Total Wins", p1_wins); col_stat1.metric("Winrate", p1_wr); col_stat1.metric("Avg Points Scored", f"{p1_avg_pts:.1f}")
+            col_stat2.markdown(f"#### {p2} Stats"); col_stat2.metric("Total Wins", p2_wins); col_stat2.metric("Winrate", p2_wr); col_stat2.metric("Avg Points Scored", f"{p2_avg_pts:.1f}")
+            
+            st.divider()
+            st.markdown("### 🌶️ Insightful Data")
+            c1, c2 = st.columns(2)
+            c1.info(f"**Biggest Blowout:** \n\n{blowout_winner} crushed by **{blowout_margin} points** ({int(blowout_match.get('Winner_Score'))} - {int(blowout_match.get('Loser_Score'))}).")
+            if close_games:
+                c2.warning(f"**Nail-biters (1-2 point diff):** \n\nOut of {len(close_games)} close games, {p1} won **{p1_close_wins}**, and {p2} won **{p2_close_wins}**.")
+            else:
+                c2.warning("**Nail-biters:** \n\nNone yet!")
+
+            st.write("### Game History Breakdown")
             df_h2h = pd.DataFrame(h2h).rename(columns={"Winner_Score": "Winner Score", "Loser_Score": "Loser Score"})
             df_h2h["Winner Score"] = df_h2h["Winner Score"].astype(int)
             df_h2h["Loser Score"] = df_h2h["Loser Score"].astype(int)
             st.table(df_h2h.style.hide(axis="index"))
+        else: st.info("No matches recorded between them.")
