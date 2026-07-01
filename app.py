@@ -3,7 +3,7 @@ import pandas as pd
 import altair as alt
 from streamlit_gsheets import GSheetsConnection
 
-st.set_page_config(page_title="Squash Tabella", layout="wide", page_icon="🎾")
+st.set_page_config(page_title="Squash Leaderboard & ELO Tracker", layout="wide", page_icon="🎾")
 
 # --- CSS INJECTION TO FORCE CENTER ALIGNMENT ---
 st.markdown("""
@@ -19,6 +19,7 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 # Initialize Session States
 if 'edit_mode' not in st.session_state: st.session_state.edit_mode = False
+if 'input_key' not in st.session_state: st.session_state.input_key = 0 # Used to forcefully reset inputs to 0
 
 try:
     df_database = conn.read(spreadsheet=SHEET_URL, worksheet="Matches", usecols=[0, 1, 2, 3], ttl=0) 
@@ -33,7 +34,6 @@ def calculate_stats(matches):
     stats = {p: {"Played": 0, "Won": 0, "Pts_Scored": 0, "Pts_Conceded": 0} for p in players_list}
     K = 32
     
-    # Initialize history to track the Elo timeline
     elo_history = [{"Match": 0, **elo}]
     match_count = 0
     
@@ -56,7 +56,6 @@ def calculate_stats(matches):
         elo[w] = round(r_w + (K * (1 - expected_w)))
         elo[l] = round(r_l - (K * (1 - expected_w)))
         
-        # Save a snapshot of the Elos after this match
         match_count += 1
         elo_history.append({"Match": match_count, **elo})
         
@@ -71,48 +70,86 @@ def calculate_stats(matches):
     
     return df, elo, elo_history
 
-# Unpack the new elo_history
 df_leaderboard, current_elos, elo_history = calculate_stats(st.session_state.matches)
 
 st.sidebar.title("🏸 Squash Dashboard")
-view = st.sidebar.radio("Navigation", ["🏆 Leaderboard", "📝 Record Match", "⚔️ 1v1 Head-to-Head"])
+view = st.sidebar.radio("Navigation", ["🏆 Leaderboard", "⚔️ 1v1 Head-to-Head"])
 
 if view == "🏆 Leaderboard":
     st.title("🏆 Leaderboard")
-    st.table(df_leaderboard.style.hide(axis="index"))
-    
-    st.subheader("🕒 Recent Matches")
-    recent_df = pd.DataFrame(st.session_state.matches[-10:])
-    recent_df["Winner_Score"] = recent_df["Winner_Score"].astype(int)
-    recent_df["Loser_Score"] = recent_df["Loser_Score"].astype(int)
-
-    if not st.session_state.edit_mode:
-        st.table(recent_df.rename(columns={"Winner_Score": "Winner Score", "Loser_Score": "Loser Score"}).iloc[::-1])
-        if st.button("Edit Matches"):
-            st.session_state.edit_mode = True
-            st.rerun()
+    if not st.session_state.matches:
+        st.warning("No matches recorded yet. Play a game!")
     else:
-        # Data Editor with Dropdowns
-        edited_df = st.data_editor(
-            recent_df.iloc[::-1], 
-            hide_index=True, 
-            use_container_width=True,
-            column_config={
-                "Winner": st.column_config.SelectboxColumn(options=players_list),
-                "Loser": st.column_config.SelectboxColumn(options=players_list),
-                "Winner_Score": st.column_config.NumberColumn(min_value=0),
-                "Loser_Score": st.column_config.NumberColumn(min_value=0)
-            }
-        )
-        if st.button("Save Changes & Sync"):
-            all_matches_df = pd.DataFrame(st.session_state.matches)
-            all_matches_df.iloc[-10:] = edited_df.iloc[::-1]
-            conn.update(spreadsheet=SHEET_URL, worksheet="Matches", data=all_matches_df)
-            st.session_state.edit_mode = False
+        st.table(df_leaderboard.style.hide(axis="index"))
+    
+    # --- RECORD MATCH SECTION (Integrated) ---
+    st.divider()
+    st.subheader("📝 Record Match")
+    
+    c1, c2 = st.columns(2)
+    with c1:
+        winner = st.selectbox("Winner", players_list, index=None, placeholder="Select...", key=f"w_name_{st.session_state.input_key}")
+        w_score = st.number_input("Winner Points", min_value=0, value=0, step=1, key=f"w_score_{st.session_state.input_key}")
+    with c2:
+        loser_options = [p for p in players_list if p != winner] if winner else players_list
+        loser = st.selectbox("Loser", loser_options, index=None, placeholder="Select...", key=f"l_name_{st.session_state.input_key}")
+        
+        default_loser_points = 0
+        if winner and loser:
+            relevant = [m for m in st.session_state.matches if m.get("Winner") == winner and m.get("Loser") == loser]
+            if relevant:
+                try: default_loser_points = int(round(sum(int(m.get("Loser_Score", 0)) for m in relevant) / len(relevant)))
+                except ValueError: pass
+                
+        l_score = st.number_input("Loser Points", min_value=0, value=default_loser_points, step=1, key=f"l_score_{st.session_state.input_key}")
+        if winner and loser and default_loser_points != 0:
+            st.caption(f"*(Auto-filled with {loser}'s avg score against {winner})*")
+    
+    if st.button("Save Match ☁️"):
+        if not winner or not loser: st.error("Select both players.")
+        elif w_score <= l_score: st.error("Winner points must be > Loser points.")
+        else:
+            st.session_state.matches.append({"Winner": winner, "Winner_Score": int(w_score), "Loser_Score": int(l_score), "Loser": loser})
+            conn.update(spreadsheet=SHEET_URL, worksheet="Matches", data=pd.DataFrame(st.session_state.matches))
             st.cache_data.clear()
+            st.session_state.input_key += 1 # This explicitly resets all input fields to 0/empty
             st.rerun()
-            
-    # --- NEW TALL ELO HISTORY CHART ---
+
+    # --- RECENT MATCHES SECTION ---
+    st.divider()
+    st.subheader("🕒 Recent Matches")
+    if st.session_state.matches:
+        # Get last 10 matches in true chronological order (newest at bottom)
+        recent_df = pd.DataFrame(st.session_state.matches[-10:])
+        recent_df["Winner_Score"] = recent_df["Winner_Score"].astype(int)
+        recent_df["Loser_Score"] = recent_df["Loser_Score"].astype(int)
+
+        if not st.session_state.edit_mode:
+            st.table(recent_df.rename(columns={"Winner_Score": "Winner Score", "Loser_Score": "Loser Score"}))
+            if st.button("Edit Matches"):
+                st.session_state.edit_mode = True
+                st.rerun()
+        else:
+            edited_df = st.data_editor(
+                recent_df, 
+                hide_index=True, 
+                use_container_width=True,
+                column_config={
+                    "Winner": st.column_config.SelectboxColumn(options=players_list),
+                    "Loser": st.column_config.SelectboxColumn(options=players_list),
+                    "Winner_Score": st.column_config.NumberColumn(min_value=0),
+                    "Loser_Score": st.column_config.NumberColumn(min_value=0)
+                }
+            )
+            if st.button("Save Changes & Sync"):
+                all_matches_df = pd.DataFrame(st.session_state.matches)
+                all_matches_df.iloc[-10:] = edited_df
+                conn.update(spreadsheet=SHEET_URL, worksheet="Matches", data=all_matches_df)
+                st.session_state.edit_mode = False
+                st.cache_data.clear()
+                st.rerun()
+                
+    # --- ELO HISTORY CHART ---
     st.divider()
     st.subheader("📈 Elo Rating History")
     if len(elo_history) > 1:
@@ -120,42 +157,14 @@ if view == "🏆 Leaderboard":
         active_players = df_leaderboard["Player"].tolist()
         
         if active_players:
-            # Reformat the data structure to work with Altair Charting
             melted_df = history_df.melt(id_vars="Match", value_vars=active_players, var_name="Player", value_name="Elo")
-            
-            # Build an explicit interactive chart
             chart = alt.Chart(melted_df).mark_line(size=3).encode(
                 x=alt.X("Match:Q", title="Matches Played (Timeline)"),
-                # Force the Y-axis to start at exactly 0
                 y=alt.Y("Elo:Q", scale=alt.Scale(zero=True), title="Elo Rating"),
                 color=alt.Color("Player:N", title="Player"),
                 tooltip=["Match", "Player", "Elo"]
-            ).properties(
-                height=700 # Made the chart extremely tall!
-            ).interactive()
-            
+            ).properties(height=700).interactive()
             st.altair_chart(chart, use_container_width=True)
-    else:
-        st.info("Play some matches to see your Elo history chart!")
-
-elif view == "📝 Record Match":
-    st.title("📝 Enter Match Result")
-    c1, c2 = st.columns(2)
-    with c1:
-        winner = st.selectbox("Winner", players_list, index=None, placeholder="Select...")
-        w_score = st.number_input("Winner Points", min_value=0, value=11, step=1)
-    with c2:
-        loser_options = [p for p in players_list if p != winner] if winner else players_list
-        loser = st.selectbox("Loser", loser_options, index=None, placeholder="Select...")
-        l_score = st.number_input("Loser Points", min_value=0, value=8, step=1)
-    
-    if st.button("Save Match"):
-        if not winner or not loser: st.error("Select both players.")
-        elif w_score <= l_score: st.error("Winner points must be > Loser points.")
-        else:
-            st.session_state.matches.append({"Winner": winner, "Winner_Score": int(w_score), "Loser_Score": int(l_score), "Loser": loser})
-            conn.update(spreadsheet=SHEET_URL, worksheet="Matches", data=pd.DataFrame(st.session_state.matches))
-            st.cache_data.clear(); st.rerun()
 
 elif view == "⚔️ 1v1 Head-to-Head":
     st.title("⚔️ Rivalry Statistics")
